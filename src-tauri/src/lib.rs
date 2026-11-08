@@ -1,6 +1,29 @@
+mod db;
 mod money;
 mod parsers;
 mod statement;
+
+use chrono::NaiveDate;
+use serde::Serialize;
+use tauri::Manager;
+
+#[derive(Serialize)]
+struct UploadSummary {
+    statement_id: i64,
+    transactions: usize,
+}
+
+/// Lists the transactions of the faturas due in `month` (`"YYYY-MM"`).
+#[tauri::command(async)]
+fn list_transactions(
+    month: String,
+    db: tauri::State<'_, db::Db>,
+) -> Result<Vec<db::MonthTransaction>, String> {
+    let first_day = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
+        .map_err(|e| format!("invalid month {month}: {e}"))?;
+    db.month_transactions(first_day)
+        .map_err(|e| format!("failed to list transactions for {month}: {e}"))
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -11,7 +34,10 @@ fn greet(name: &str) -> String {
 /// Receives an invoice PDF as a raw IPC body.
 /// The original file name comes URI-encoded in the `x-file-name` header.
 #[tauri::command(async)]
-fn upload_fatura(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+fn upload_fatura(
+    request: tauri::ipc::Request<'_>,
+    db: tauri::State<'_, db::Db>,
+) -> Result<UploadSummary, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("expected a raw body".into());
     };
@@ -30,14 +56,32 @@ fn upload_fatura(request: tauri::ipc::Request<'_>) -> Result<(), String> {
     let statement = parsers::parse(&text).map_err(|e| format!("failed to parse {name}: {e}"))?;
 
     println!("--- {name} ({} bytes) ---\n{statement}", bytes.len());
-    Ok(())
+
+    let statement_id = db
+        .save_statement(&statement, &name)
+        .map_err(|e| format!("failed to save {name}: {e}"))?;
+
+    Ok(UploadSummary {
+        statement_id,
+        transactions: statement.transactions.len(),
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, upload_fatura])
+        .setup(|app| {
+            let dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&dir)?;
+            app.manage(db::Db::open(&dir.join("facaopix.db"))?);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            upload_fatura,
+            list_transactions
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -37,6 +37,16 @@ pub enum Kind {
     Payment,
 }
 
+impl Kind {
+    /// Lowercase name, matching the serde representation.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Purchase => "purchase",
+            Self::Payment => "payment",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone, Copy)]
 pub struct Installment {
     pub current: u16,
@@ -65,7 +75,11 @@ impl fmt::Display for Statement {
                 installment
             )?;
         }
-        let installments = self.transactions.iter().filter(|t| t.installment.is_some()).count();
+        let installments = self
+            .transactions
+            .iter()
+            .filter(|t| t.installment.is_some())
+            .count();
         write!(
             f,
             "{} transactions ({} installments)",

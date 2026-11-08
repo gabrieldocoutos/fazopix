@@ -30,6 +30,7 @@ const DETAILS_START: &str = "Detalhes de consumo";
 const PAYMENTS_START: &str = "Movimentações na fatura";
 const DETAILS_END: &str = "Seu cartão de crédito";
 const COLUMN_HEADER: &str = "Data Movimentações Valor em R$";
+const BILL_PAYMENT: &str = "Pagamento da fatura";
 
 enum Section {
     Preamble,
@@ -51,7 +52,8 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
         .find(|l| !l.is_empty())
         .cloned()
         .ok_or(ParseError::MissingField("holder"))?;
-    let issued_on = find_date(&lines, "Emitida em:").ok_or(ParseError::MissingField("emitida em"))?;
+    let issued_on =
+        find_date(&lines, "Emitida em:").ok_or(ParseError::MissingField("emitida em"))?;
     let due_on = find_date(&lines, "Vencimento:").ok_or(ParseError::MissingField("vencimento"))?;
     let closing_on = find_date(&lines, "Fechamento da fatura")
         .ok_or(ParseError::MissingField("fechamento da fatura"))?;
@@ -70,7 +72,10 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
             continue;
         }
 
-        if line.is_empty() || line == holder || line == COLUMN_HEADER || line.starts_with("Vencimento:")
+        if line.is_empty()
+            || line == holder
+            || line == COLUMN_HEADER
+            || line.starts_with("Vencimento:")
         {
             continue;
         }
@@ -98,6 +103,10 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
             _ => return Err(unknown(line_no, line)),
         };
         let caps = ITEM.captures(line).ok_or_else(|| unknown(line_no, line))?;
+        // Paying the bill isn't spending; only track what was consumed.
+        if caps[3].contains(BILL_PAYMENT) {
+            continue;
+        }
 
         let day: u32 = caps[1].parse().unwrap();
         let month: u32 = caps[2].parse().unwrap();
@@ -119,7 +128,11 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
             date,
             description: caps[3].trim().to_string(),
             // Payments/credits are printed positive but reduce the balance.
-            amount_cents: if kind == Kind::Payment { -amount } else { amount },
+            amount_cents: if kind == Kind::Payment {
+                -amount
+            } else {
+                amount
+            },
             kind,
             card,
             installment,
@@ -155,7 +168,8 @@ fn find_date(lines: &[String], label: &str) -> Option<NaiveDate> {
 /// after it was made, so pick the year whose date is closest to `closing - (K-1) months`
 /// without being after the closing date.
 fn infer_date(day: u32, month: u32, installment: u16, closing: NaiveDate) -> Option<NaiveDate> {
-    let anchor = closing.checked_sub_months(Months::new(u32::from(installment.saturating_sub(1))))?;
+    let anchor =
+        closing.checked_sub_months(Months::new(u32::from(installment.saturating_sub(1))))?;
     (closing.year() - 2..=closing.year())
         .filter_map(|y| NaiveDate::from_ymd_opt(y, month, day))
         .filter(|d| *d <= closing)

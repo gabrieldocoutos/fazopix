@@ -1,5 +1,9 @@
 import { NavLink, useLocation } from "react-router";
-import { CreditCardPlusIcon, HouseIcon } from "lucide-react";
+import {
+  CreditCardPlusIcon,
+  CreditCardReaderIcon,
+  HouseIcon,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -14,6 +18,11 @@ import {
 const navItems = [
   { title: "Home", url: "/", icon: HouseIcon },
   { title: "Upload de fatura", url: "/upload-fatura", icon: CreditCardPlusIcon },
+  {
+    title: "Gastos cartão de crédito",
+    url: "/gastos-cartao",
+    icon: CreditCardReaderIcon,
+  },
 ];
 
 export function AppSidebar() {
