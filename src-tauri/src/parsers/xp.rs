@@ -9,6 +9,7 @@
 //!   `Data Descrição R$ US$`, closed by `Subtotal X`
 //!   - item: `DD/MM/YY <description>[ - Parcela K/N] <R$ amount>[ <US$ amount>]`
 //!   - amounts have no currency symbol; credits/payments are printed negative
+//! - `Despesas até a emissão desta fatura X` must match the sum of all items
 //! - everything outside card sections is ignored.
 
 use std::sync::LazyLock;
@@ -17,7 +18,10 @@ use chrono::NaiveDate;
 use regex::Regex;
 
 use super::ParseError;
-use crate::money::parse_brl;
+use super::common::{
+    amount_on_line, check_total, date_after, invalid_date, normalize_lines, parse_amount, unknown,
+    value_after,
+};
 use crate::statement::{Installment, Kind, Statement, Transaction};
 
 static ITEM: LazyLock<Regex> = LazyLock::new(|| {
@@ -33,11 +37,7 @@ const COLUMN_HEADER: &str = "Data Descrição R$ US$";
 const BILL_PAYMENT: &str = "Pagamentos Validos Normais";
 
 pub fn parse(text: &str) -> Result<Statement, ParseError> {
-    // Collapse runs of whitespace so matching doesn't depend on PDF spacing.
-    let lines: Vec<String> = text
-        .lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .collect();
+    let lines = normalize_lines(text);
 
     let holder = value_after(&lines, "Titular")
         .map(str::to_string)
@@ -47,6 +47,8 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
         .ok_or(ParseError::MissingField("fatura fechada em"))?;
     let issued_on = date_after(&lines, "Data do Documento")
         .ok_or(ParseError::MissingField("data do documento"))?;
+    let total = amount_on_line(&lines, "Despesas até a emissão desta fatura ")
+        .ok_or(ParseError::MissingField("despesas até a emissão"))?;
 
     let mut transactions = Vec::new();
     let mut card: Option<String> = None;
@@ -77,12 +79,8 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
             continue;
         }
 
-        let date = NaiveDate::parse_from_str(&caps[1], "%d/%m/%y").map_err(|_| {
-            ParseError::InvalidDate {
-                line_no,
-                text: line.to_string(),
-            }
-        })?;
+        let date = NaiveDate::parse_from_str(&caps[1], "%d/%m/%y")
+            .map_err(|_| invalid_date(line_no, line))?;
         let installment = match (caps.get(3), caps.get(4)) {
             (Some(k), Some(n)) => Some(Installment {
                 current: k.as_str().parse().map_err(|_| unknown(line_no, line))?,
@@ -107,6 +105,8 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
         });
     }
 
+    check_total(total, &transactions)?;
+
     Ok(Statement {
         issuer: "XP",
         holder,
@@ -115,37 +115,6 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
         closing_on,
         transactions,
     })
-}
-
-fn unknown(line_no: usize, text: &str) -> ParseError {
-    ParseError::UnknownLine {
-        line_no,
-        text: text.to_string(),
-    }
-}
-
-/// Parses a bare `"1.234,56"` / `"-1.234,56"` amount into cents.
-fn parse_amount(s: &str) -> Option<i64> {
-    let s = s.trim();
-    match s.strip_prefix('-') {
-        Some(rest) => parse_brl(&format!("R$ {rest}")).map(|c| -c),
-        None => parse_brl(&format!("R$ {s}")),
-    }
-}
-
-/// First non-empty line after the first line equal to `label`.
-fn value_after<'a>(lines: &'a [String], label: &str) -> Option<&'a str> {
-    let start = lines.iter().position(|l| l == label)?;
-    lines[start + 1..]
-        .iter()
-        .map(String::as_str)
-        .find(|l| !l.is_empty())
-}
-
-/// `DD/MM/YYYY` at the start of the first non-empty line after `label`.
-fn date_after(lines: &[String], label: &str) -> Option<NaiveDate> {
-    let value = value_after(lines, label)?;
-    NaiveDate::parse_from_str(value.get(..10)?, "%d/%m/%Y").ok()
 }
 
 #[cfg(test)]
@@ -167,6 +136,8 @@ RUA X 1
 
 10/11/2026
 
+Despesas até a emissão desta fatura 190,10
+
 Fatura fechada em
 
 03/11/2026
@@ -184,7 +155,7 @@ Data Descrição R$ US$
 
 10/10/26 BATTLE.NET 54,90 11,03
 
-12/10/26 ESTORNO LOJA -1.010,00 0,00
+12/10/26 ESTORNO LOJA -10,00 0,00
 
 Subtotal 1.378,10
 
@@ -236,7 +207,7 @@ As informações deste demonstrativo são apresentadas de acordo com a regulamen
                 (d(2026, 8, 2), "PG *NUVEM LURKMEI", 14328, Kind::Purchase, Some("0808"), Some((4, 6))),
                 (d(2026, 10, 10), "IOF Transacoes Exterior", 192, Kind::Purchase, Some("0808"), None),
                 (d(2026, 10, 10), "BATTLE.NET", 5490, Kind::Purchase, Some("0808"), None),
-                (d(2026, 10, 12), "ESTORNO LOJA", -101000, Kind::Payment, Some("0808"), None),
+                (d(2026, 10, 12), "ESTORNO LOJA", -1000, Kind::Payment, Some("0808"), None),
             ]
         );
     }
@@ -245,5 +216,11 @@ As informações deste demonstrativo são apresentadas de acordo com a regulamen
     fn rejects_unknown_line_in_card_section() {
         let text = SAMPLE.replace("10/10/26 BATTLE.NET 54,90 11,03", "garbage");
         assert!(matches!(parse(&text), Err(ParseError::UnknownLine { .. })));
+    }
+
+    #[test]
+    fn rejects_total_mismatch() {
+        let text = SAMPLE.replace("fatura 190,10", "fatura 190,11");
+        assert!(matches!(parse(&text), Err(ParseError::TotalMismatch { .. })));
     }
 }

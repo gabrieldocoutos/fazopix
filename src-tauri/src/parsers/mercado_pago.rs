@@ -6,16 +6,16 @@
 //! - `Detalhes de consumo` starts the line items:
 //!   - `Movimentações na fatura`: payments/credits, printed positive
 //!   - `Cartão Visa [************NNNN]`: card section (header repeats per page),
-//!     closed by `Total R$ X`
+//!     closed by `Total R$ X`, which must match the sum of the card's items
 //!   - item: `DD/MM <description>[ Parcela K de N] R$ 1.234,56`
 //! - `Seu cartão de crédito` starts informational sections (ignored).
 
 use std::sync::LazyLock;
 
-use chrono::{Datelike, Months, NaiveDate};
 use regex::Regex;
 
 use super::ParseError;
+use super::common::{check_total, date_on_line, infer_date, normalize_lines, unknown};
 use crate::money::parse_brl;
 use crate::statement::{Installment, Kind, Statement, Transaction};
 
@@ -41,11 +41,7 @@ enum Section {
 }
 
 pub fn parse(text: &str) -> Result<Statement, ParseError> {
-    // Collapse runs of whitespace so matching doesn't depend on PDF spacing.
-    let lines: Vec<String> = text
-        .lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .collect();
+    let lines = normalize_lines(text);
 
     let holder = lines
         .iter()
@@ -53,13 +49,16 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
         .cloned()
         .ok_or(ParseError::MissingField("holder"))?;
     let issued_on =
-        find_date(&lines, "Emitida em:").ok_or(ParseError::MissingField("emitida em"))?;
-    let due_on = find_date(&lines, "Vencimento:").ok_or(ParseError::MissingField("vencimento"))?;
-    let closing_on = find_date(&lines, "Fechamento da fatura")
+        date_on_line(&lines, "Emitida em:").ok_or(ParseError::MissingField("emitida em"))?;
+    let due_on =
+        date_on_line(&lines, "Vencimento:").ok_or(ParseError::MissingField("vencimento"))?;
+    let closing_on = date_on_line(&lines, "Fechamento da fatura")
         .ok_or(ParseError::MissingField("fechamento da fatura"))?;
 
     let mut transactions = Vec::new();
     let mut section = Section::Preamble;
+    // Index of the current card section's first transaction (headers repeat per page).
+    let mut card_start = 0;
 
     for (idx, line) in lines.iter().enumerate() {
         let line_no = idx + 1;
@@ -87,14 +86,18 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
             continue;
         }
         if let Some(caps) = CARD_HEADER.captures(line) {
+            if !matches!(&section, Section::Card(last4) if *last4 == caps[1]) {
+                card_start = transactions.len();
+            }
             section = Section::Card(caps[1].to_string());
             continue;
         }
-        if let Section::Card(_) = section {
-            if line.strip_prefix("Total ").and_then(parse_brl).is_some() {
-                section = Section::AfterCard;
-                continue;
-            }
+        if let Section::Card(_) = section
+            && let Some(total) = line.strip_prefix("Total ").and_then(parse_brl)
+        {
+            check_total(total, &transactions[card_start..])?;
+            section = Section::AfterCard;
+            continue;
         }
 
         let (kind, card) = match &section {
@@ -149,29 +152,3 @@ pub fn parse(text: &str) -> Result<Statement, ParseError> {
     })
 }
 
-fn unknown(line_no: usize, text: &str) -> ParseError {
-    ParseError::UnknownLine {
-        line_no,
-        text: text.to_string(),
-    }
-}
-
-/// First `DD/MM/YYYY` right after `label` on any line.
-fn find_date(lines: &[String], label: &str) -> Option<NaiveDate> {
-    lines.iter().find_map(|l| {
-        let rest = l.strip_prefix(label)?.trim();
-        NaiveDate::parse_from_str(rest.get(..10)?, "%d/%m/%Y").ok()
-    })
-}
-
-/// Lines only carry `DD/MM`. Installment K of a purchase is billed roughly K-1 months
-/// after it was made, so pick the year whose date is closest to `closing - (K-1) months`
-/// without being after the closing date.
-fn infer_date(day: u32, month: u32, installment: u16, closing: NaiveDate) -> Option<NaiveDate> {
-    let anchor =
-        closing.checked_sub_months(Months::new(u32::from(installment.saturating_sub(1))))?;
-    (closing.year() - 2..=closing.year())
-        .filter_map(|y| NaiveDate::from_ymd_opt(y, month, day))
-        .filter(|d| *d <= closing)
-        .min_by_key(|d| (*d - anchor).num_days().abs())
-}
