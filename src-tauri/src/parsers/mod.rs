@@ -1,6 +1,7 @@
 //! Issuer detection and dispatch to issuer-specific statement parsers.
 
 mod mercado_pago;
+mod xp;
 
 use std::fmt;
 
@@ -33,8 +34,11 @@ impl std::error::Error for ParseError {}
 
 /// Parses extracted statement text, picking the parser by issuer.
 pub fn parse(text: &str) -> Result<Statement, ParseError> {
+    println!("{}", text);
     if text.contains("Mercado Pago") {
         mercado_pago::parse(text)
+    } else if text.contains("Banco XP S.A.") {
+        xp::parse(text)
     } else {
         Err(ParseError::UnknownIssuer)
     }

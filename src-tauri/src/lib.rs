@@ -50,8 +50,15 @@ fn upload_fatura(
         .map(|s| s.into_owned())
         .unwrap_or_else(|_| raw_name.to_string());
 
+    // TODO: stop hardcoding; ask the user and store it in the keychain.
+    const PDF_PASSWORD: &str = "03941";
+
+    // Falls back to the known password when the PDF is password-protected.
     let text = pdf_extract::extract_text_from_mem(bytes)
+        .or_else(|err| extract_encrypted_text(bytes, PDF_PASSWORD).map_err(|_| err))
         .map_err(|e| format!("failed to read PDF {name}: {e}"))?;
+
+    println!("{}", text);
 
     let statement = parsers::parse(&text).map_err(|e| format!("failed to parse {name}: {e}"))?;
 
@@ -65,6 +72,24 @@ fn upload_fatura(
         statement_id,
         transactions: statement.transactions.len(),
     })
+}
+
+/// Extracts text from a password-protected PDF.
+///
+/// `pdf_extract::extract_text_from_mem_encrypted` can't be used: it loads with
+/// `Document::load_mem` and decrypts afterwards, but lopdf >= 0.42 skips encrypted
+/// objects unless the password is given at load time, so it returns empty text.
+fn extract_encrypted_text(
+    bytes: &[u8],
+    password: &str,
+) -> Result<String, pdf_extract::OutputError> {
+    let doc = pdf_extract::Document::load_mem_with_options(
+        bytes,
+        pdf_extract::LoadOptions::with_password(password),
+    )?;
+    let mut text = String::new();
+    pdf_extract::output_doc(&doc, &mut pdf_extract::PlainTextOutput::new(&mut text))?;
+    Ok(text)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
