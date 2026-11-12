@@ -6,6 +6,7 @@ import Entradas from "@/pages/entradas";
 import GastosCartao from "@/pages/gastos-cartao";
 import Home from "@/pages/home";
 import UploadFatura from "@/pages/upload-fatura";
+import Investimentos from "@/pages/investimentos";
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
             <Route path="upload-fatura" element={<UploadFatura />} />
             <Route path="gastos-cartao" element={<GastosCartao />} />
             <Route path="entradas" element={<Entradas />} />
+            <Route path="investimentos" element={<Investimentos />} />
           </Route>
         </Routes>
       </HashRouter>

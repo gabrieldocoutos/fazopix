@@ -4,6 +4,7 @@ import {
   CreditCardPlusIcon,
   CreditCardReaderIcon,
   HouseIcon,
+  PiggyBankIcon,
 } from "lucide-react";
 import {
   Sidebar,
@@ -18,13 +19,18 @@ import {
 
 const navItems = [
   { title: "Home", url: "/", icon: HouseIcon },
-  { title: "Upload de fatura", url: "/upload-fatura", icon: CreditCardPlusIcon },
+  {
+    title: "Upload de fatura",
+    url: "/upload-fatura",
+    icon: CreditCardPlusIcon,
+  },
   {
     title: "Gastos cartão de crédito",
     url: "/gastos-cartao",
     icon: CreditCardReaderIcon,
   },
   { title: "Entradas", url: "/entradas", icon: BanknoteArrowUpIcon },
+  { title: "Investimentos", url: "/investimentos", icon: PiggyBankIcon },
 ];
 
 export function AppSidebar() {
