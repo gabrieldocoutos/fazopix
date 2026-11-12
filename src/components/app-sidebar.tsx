@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from "react-router";
 import {
+  BanknoteArrowUpIcon,
   CreditCardPlusIcon,
   CreditCardReaderIcon,
   HouseIcon,
@@ -23,6 +24,7 @@ const navItems = [
     url: "/gastos-cartao",
     icon: CreditCardReaderIcon,
   },
+  { title: "Entradas", url: "/entradas", icon: BanknoteArrowUpIcon },
 ];
 
 export function AppSidebar() {

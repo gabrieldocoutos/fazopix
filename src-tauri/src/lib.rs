@@ -3,7 +3,7 @@ mod money;
 mod parsers;
 mod statement;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -23,6 +23,49 @@ fn list_transactions(
         .map_err(|e| format!("invalid month {month}: {e}"))?;
     db.month_transactions(first_day)
         .map_err(|e| format!("failed to list transactions for {month}: {e}"))
+}
+
+/// Registers an income entry for `month` (`"YYYY-MM"`) and returns its id.
+#[tauri::command(async)]
+fn add_income(
+    month: String,
+    description: String,
+    amount_cents: i64,
+    db: tauri::State<'_, db::Db>,
+) -> Result<i64, String> {
+    let first_day = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
+        .map_err(|e| format!("invalid month {month}: {e}"))?;
+    let description = description.trim();
+    if description.is_empty() {
+        return Err("description is required".into());
+    }
+    if amount_cents <= 0 {
+        return Err("amount must be greater than zero".into());
+    }
+    db.add_income(
+        first_day.year(),
+        first_day.month(),
+        description,
+        amount_cents,
+    )
+    .map_err(|e| format!("failed to save income: {e}"))
+}
+
+/// Lists all income entries, newest month first.
+#[tauri::command(async)]
+fn list_incomes(db: tauri::State<'_, db::Db>) -> Result<Vec<db::Income>, String> {
+    db.list_incomes()
+        .map_err(|e| format!("failed to list incomes: {e}"))
+}
+
+/// Deletes an income entry.
+#[tauri::command(async)]
+fn delete_income(id: i64, db: tauri::State<'_, db::Db>) -> Result<(), String> {
+    match db.delete_income(id) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("income {id} not found")),
+        Err(e) => Err(format!("failed to delete income {id}: {e}")),
+    }
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -105,7 +148,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             upload_fatura,
-            list_transactions
+            list_transactions,
+            add_income,
+            list_incomes,
+            delete_income
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

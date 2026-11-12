@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { invoke } from "@tauri-apps/api/core";
 import { CreditCardReaderIcon } from "lucide-react";
-import { formatBRL, formatDate } from "@/lib/utils";
+import { currentMonth, formatBRL, formatDate, monthLabel } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardContent,
@@ -34,19 +35,11 @@ type MonthTransaction = {
   issuer: string;
 };
 
-const COLUMNS = ["Data", "Descrição", "Emissor", "Cartão", "Parcela", "Valor"];
+const COLUMNS = ["#", "Data","Descrição", "Emissor", "Cartão", "Parcela", "Valor"];
 
-function currentMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function monthLabel(month: string) {
-  const [y, m] = month.split("-").map(Number);
-  return new Intl.DateTimeFormat("pt-BR", {
-    month: "long",
-    year: "numeric",
-  }).format(new Date(y, m - 1, 1));
+/** A real split (N > 1) billed this month; estornos are left out. */
+function isParcelado(t: MonthTransaction) {
+  return !!t.installment && t.installment.total > 1 && t.amount_cents > 0;
 }
 
 export default function GastosCartao() {
@@ -160,17 +153,42 @@ function TransactionsTable({
 }: {
   transactions: MonthTransaction[];
 }) {
+  const [onlyParcelado, setOnlyParcelado] = useState(false);
+
   const total = transactions.reduce((sum, t) => sum + t.amount_cents, 0);
+  const parcelado = transactions
+    .filter(isParcelado)
+    .reduce((sum, t) => sum + t.amount_cents, 0);
+  const visible = onlyParcelado
+    ? transactions.filter(isParcelado)
+    : transactions;
 
   return (
     <Card>
       <CardHeader>
-        <CardDescription>Total de gastos</CardDescription>
-        <CardTitle className="text-2xl tabular-nums">
-          {formatBRL(total)}
-        </CardTitle>
+        <div className="flex flex-col gap-4 sm:flex-row sm:gap-12">
+          <div className="flex flex-col gap-1.5">
+            <CardDescription>Total de gastos</CardDescription>
+            <CardTitle className="text-2xl tabular-nums">
+              {formatBRL(total)}
+            </CardTitle>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <CardDescription>Total parcelado</CardDescription>
+            <CardTitle className="text-2xl tabular-nums">
+              {formatBRL(parcelado)}
+            </CardTitle>
+          </div>
+        </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-4">
+        <Label className="w-fit cursor-pointer font-normal">
+          <Checkbox
+            checked={onlyParcelado}
+            onCheckedChange={(checked) => setOnlyParcelado(checked === true)}
+          />
+          Mostrar apenas compras parceladas
+        </Label>
         <Table>
           <TableHeader>
             <TableRow>
@@ -185,8 +203,21 @@ function TransactionsTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {transactions.map((t) => (
+            {visible.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={COLUMNS.length}
+                  className="py-6 text-center text-muted-foreground"
+                >
+                  Nenhuma compra parcelada neste mês.
+                </TableCell>
+              </TableRow>
+            )}
+            {visible.map((t, i) => (
               <TableRow key={t.id}>
+                <TableCell className="text-muted-foreground tabular-nums">
+                  {i + 1}
+                </TableCell>
                 <TableCell className="tabular-nums">
                   {formatDate(t.date)}
                 </TableCell>

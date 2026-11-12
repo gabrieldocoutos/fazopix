@@ -21,6 +21,16 @@ pub struct MonthTransaction {
     pub issuer: String,
 }
 
+/// A monthly income entry ("Entrada"), net of taxes.
+#[derive(Debug, Serialize)]
+pub struct Income {
+    pub id: i64,
+    pub year: i32,
+    pub month: u32,
+    pub description: String,
+    pub amount_cents: i64,
+}
+
 /// Schema migrations, applied in order. `PRAGMA user_version` holds how many ran.
 const MIGRATIONS: &[&str] = &[r"
 CREATE TABLE statements (
@@ -48,6 +58,16 @@ CREATE TABLE transactions (
 );
 CREATE INDEX transactions_statement_id ON transactions(statement_id);
 CREATE INDEX transactions_date ON transactions(date);
+", r"
+CREATE TABLE incomes (
+    id           INTEGER PRIMARY KEY,
+    year         INTEGER NOT NULL,
+    month        INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    description  TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX incomes_year_month ON incomes(year, month);
 "];
 
 pub struct Db(Mutex<Connection>);
@@ -141,6 +161,49 @@ impl Db {
             })
         })?;
         rows.collect()
+    }
+
+    /// Stores an income entry and returns its id.
+    pub fn add_income(
+        &self,
+        year: i32,
+        month: u32,
+        description: &str,
+        amount_cents: i64,
+    ) -> rusqlite::Result<i64> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "INSERT INTO incomes (year, month, description, amount_cents)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![year, month, description, amount_cents],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// All income entries, newest month first.
+    pub fn list_incomes(&self) -> rusqlite::Result<Vec<Income>> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT id, year, month, description, amount_cents
+             FROM incomes
+             ORDER BY year DESC, month DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(Income {
+                id: r.get(0)?,
+                year: r.get(1)?,
+                month: r.get(2)?,
+                description: r.get(3)?,
+                amount_cents: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Deletes an income entry. Returns whether it existed.
+    pub fn delete_income(&self, id: i64) -> rusqlite::Result<bool> {
+        let conn = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(conn.execute("DELETE FROM incomes WHERE id = ?1", params![id])? > 0)
     }
 }
 
@@ -253,5 +316,28 @@ mod tests {
         assert!(rows[1].installment.is_none());
 
         assert!(db.month_transactions(date(2026, 9, 1)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn incomes_list_newest_month_first_and_delete() {
+        let db = Db::init(Connection::open_in_memory().unwrap()).unwrap();
+        let old = db.add_income(2026, 9, "Freela", 123456).unwrap();
+        let salary = db.add_income(2026, 11, "Salário", 500000).unwrap();
+        let bonus = db.add_income(2026, 11, "Bônus", 10000).unwrap();
+
+        let ids: Vec<i64> = db.list_incomes().unwrap().iter().map(|i| i.id).collect();
+        assert_eq!(ids, [bonus, salary, old]);
+
+        assert!(db.delete_income(salary).unwrap());
+        assert!(!db.delete_income(salary).unwrap());
+        assert_eq!(count(&db, "incomes"), 2);
+    }
+
+    #[test]
+    fn incomes_reject_invalid_values() {
+        let db = Db::init(Connection::open_in_memory().unwrap()).unwrap();
+        assert!(db.add_income(2026, 11, "Zero", 0).is_err());
+        assert!(db.add_income(2026, 11, "Negativo", -1).is_err());
+        assert!(db.add_income(2026, 13, "Mês inválido", 100).is_err());
     }
 }

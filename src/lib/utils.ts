@@ -15,3 +15,18 @@ export function formatDate(iso: string) {
   const [y, m, d] = iso.split("-")
   return `${d}/${m}/${y}`
 }
+
+/** The current month as `"YYYY-MM"`. */
+export function currentMonth() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+}
+
+/** Formats `"YYYY-MM"` as e.g. `"novembro de 2026"`. */
+export function monthLabel(month: string) {
+  const [y, m] = month.split("-").map(Number)
+  return new Intl.DateTimeFormat("pt-BR", {
+    month: "long",
+    year: "numeric",
+  }).format(new Date(y, m - 1, 1))
+}
